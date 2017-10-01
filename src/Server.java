@@ -10,24 +10,29 @@ public class Server {
     private static Selector selector;
     private static int current = 0;
     private static int connectionNum = 0;
+    private static int numAcks = 0;
+    private static int numInitAcks = 0;
+    private static int myID;
     private static ChannelOperator co = new ChannelOperator();
+    private static Set<SelectionKey> connections = new HashSet<>();
+    private static PriorityQueue<Message> q = new PriorityQueue<>((m1, m2) -> m1.ts - m2.ts);
+    private static Set<Integer> seatSet = new HashSet<>();
     public static void main (String[] args) throws IOException, ClassNotFoundException, InterruptedException {
 
         // Read Config
         Scanner scanner = new Scanner(System.in);
         String line = scanner.nextLine();
         String parts[] = line.trim().split(" ");
-        int myID = Integer.parseInt(parts[0]) - 1;
+        myID =  Integer.parseInt(parts[0]) - 1;
         int numServer = Integer.parseInt(parts[1]);
         int numSeat = Integer.parseInt(parts[2]);
 
         Map<Integer, ServerInfo> servers = new HashMap<>();
-        Set<SelectionKey> connections = new HashSet<>();
-        Set<Integer> seatSet = new HashSet<>();
         for (int i = 0; i < numSeat;i ++)
             seatSet.add(i);
+        if (myID == 0)
+            seatSet.add(20);
 
-        PriorityQueue<Message> q = new PriorityQueue<>((m1, m2) -> m1.ts - m2.ts);
 
         for (int i = 0; i < numServer; i++) {
             String serverInput = scanner.nextLine();
@@ -66,8 +71,10 @@ public class Server {
                     handleRead(myID, key);
                     it.remove();
                 }
-                System.out.println(connections);
-                System.out.println(connectionNum);
+//                System.out.println(connections);
+//                System.out.println(connectionNum);
+//                System.out.println(seatSet);
+                System.out.println(q);
             }
         }
     }
@@ -90,8 +97,53 @@ public class Server {
                 co.send(socketChannel, msg);
                 System.out.println("send msg:" + msg);
             }
+            else if (s.type.equals("ActInit")) {
+                numInitAcks++;
+                System.out.println("initack:" + numInitAcks);
+                if (numInitAcks == connections.size()) {
+                    Message m = new Message(current, "Sync", myID);
+                    numAcks = 0;
+                    sendToAll(m);
+                    addToQ(m);
+                }
+            }
+            else if (s.type.equals("Ack")) {
+                numAcks++;
+                if (numAcks == connections.size()) {
+                    seatSet.clear();
+                    seatSet.addAll(s.availableSeats);
+                    sendToAll(new Message(current, "delete", myID));
+                    q.poll();
+                }
+            }
+            else if (s.type.equals("delete")) {
+                q.poll();
+            }
+            else {
+                q.add(s);
+                sendAck(socketChannel);
+            }
         }
         System.out.println("String is: '" + s + "'" );
+    }
+
+    private static void sendAck(SocketChannel socketChannel) throws IOException {
+        Message msg = new Message(current, "Ack", myID);
+        msg.availableSeats = seatSet;
+        co.send(socketChannel, msg);
+        System.out.println("send msg:" + msg);
+    }
+
+    private static void addToQ(Message m) {
+        q.add(m);
+    }
+
+    private static void sendToAll(Message msg) throws IOException {
+        for (SelectionKey key: connections) {
+            SocketChannel socketChannel = (SocketChannel) key.channel();
+            co.send(socketChannel, msg);
+            System.out.println("send msg:" + msg);
+        }
     }
 
     private static boolean handleConnection(int myID, SelectionKey key, Set<SelectionKey> connections) throws IOException {
@@ -195,7 +247,8 @@ class ChannelOperator{
 
     public Serializable recv(SocketChannel socket) throws IOException, ClassNotFoundException {
         if (readLength) {
-            socket.read(lengthByteBuffer);
+            int num = socket.read(lengthByteBuffer);
+            if (num == -1) return null;
             if (lengthByteBuffer.remaining() == 0) {
                 readLength = false;
                 dataByteBuffer = ByteBuffer.allocate(lengthByteBuffer.getInt(0));
