@@ -51,32 +51,7 @@ public class Server {
 
                 socketChannel.connect(new InetSocketAddress(si.serverIp, si.port));
                 SelectionKey key = socketChannel.register(selector, SelectionKey.OP_CONNECT);
-
-                try{
-                    selector.select();
-                }catch(IOException e){}
-
-                Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
-                while( iter.hasNext() ){
-                    SelectionKey conKey = iter.next();
-                    iter.remove();
-                    if( key.isConnectable() ){
-                        if(connect(conKey))
-                            break;
-                    }
-                }
-
-                if (!socketChannel.isConnected()) {
-                    System.out.println("not connect " +  i);
-                    continue;
-                }
                 sockets.put(i, key);
-                Message msg = new Message(current, "Init", myID);
-                co.send(socketChannel, msg);
-                System.out.println("Connect init" + i);
-                System.out.println("send msg:" + msg);
-
-                current++;
             } catch (IOException e) {
                 e.printStackTrace();
                 try {
@@ -139,6 +114,22 @@ public class Server {
                     System.out.println("String is: '" + s + "'" );
 
                     it.remove();
+                }
+                else if( key.isConnectable()){
+                    connect(key);
+                    it.remove();
+                    SocketChannel socketChannel = (SocketChannel) key.channel();
+
+                    if (!socketChannel.isConnected()) {
+                        System.out.println("not connect ");
+                        continue;
+                    }
+                    Message msg = new Message(current, "Init", myID);
+                    co.send(socketChannel, msg);
+                    System.out.println("Connect init");
+                    System.out.println("send msg:" + msg);
+
+                    current++;
                 }
 
             }
