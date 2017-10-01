@@ -9,6 +9,7 @@ public class Server {
 
     private static Selector selector;
     private static int current = 0;
+    private static int connectionNum = 0;
     private static ChannelOperator co = new ChannelOperator();
     public static void main (String[] args) throws IOException, ClassNotFoundException, InterruptedException {
 
@@ -21,7 +22,7 @@ public class Server {
         int numSeat = Integer.parseInt(parts[2]);
 
         Map<Integer, ServerInfo> servers = new HashMap<>();
-        Map<Integer, SelectionKey> sockets = new HashMap<>();
+        Set<SelectionKey> connections = new HashSet<>();
         Set<Integer> seatSet = new HashSet<>();
         for (int i = 0; i < numSeat;i ++)
             seatSet.add(i);
@@ -37,32 +38,81 @@ public class Server {
             servers.put(i, si);
         }
 
-        // Initiate server connections
+        // Initiate server connectionNum
         selector = Selector.open();
         for (int i = 0; i < numServer; i++) {
             if (i == myID)
                 continue;
-            ServerInfo si = servers.get(i);
-            SocketChannel socketChannel = null;
-            try {
-                System.out.println("init connect init" + i);
-                socketChannel = SocketChannel.open();
-                socketChannel.configureBlocking(false);
+            initiateConnection(servers, i);
+        }
+        initiateListenPort(myID, servers);
 
-                socketChannel.connect(new InetSocketAddress(si.serverIp, si.port));
-                SelectionKey key = socketChannel.register(selector, SelectionKey.OP_CONNECT);
-                sockets.put(i, key);
-            } catch (IOException e) {
-                e.printStackTrace();
-                try {
-                    socketChannel.close();
-                } catch (IOException e1) {
-                    e1.printStackTrace();
+        while (true) {
+            int num = selector.select(1000);
+            Set<SelectionKey> selectedKeys = selector.selectedKeys();
+            Iterator<SelectionKey> it = selectedKeys.iterator();
+
+            while (it.hasNext()) {
+                SelectionKey key = it.next();
+
+                if( key.isConnectable()) {
+                    if (handleConnection(myID, key, connections)) continue;
+                    it.remove();
                 }
+                else if ((key.readyOps() & SelectionKey.OP_ACCEPT) == SelectionKey.OP_ACCEPT) {
+                    handleAcception(myID, key, connections);
+                    it.remove();
+                } else if ((key.readyOps() & SelectionKey.OP_READ) == SelectionKey.OP_READ) {
+                    handleRead(myID, key);
+                    it.remove();
+                }
+                System.out.println(connections);
+                System.out.println(connectionNum);
             }
         }
+    }
 
+    private static void handleRead(int myID, SelectionKey key) throws IOException, ClassNotFoundException {
+        // Read the data
+        SocketChannel socketChannel = (SocketChannel) key.channel();
 
+        co.recv(socketChannel);
+        Serializable ois = co.recv(socketChannel);
+        Message s = (Message)ois;
+        syncCurrent(s);
+
+        if (s == null) {
+            key.channel().close();
+            System.out.println("close" + myID);
+        } else {
+            if (s.type.equals("Init")) {
+                Message msg = new Message(current, "ActInit", myID);
+                co.send(socketChannel, msg);
+                System.out.println("send msg:" + msg);
+            }
+        }
+        System.out.println("String is: '" + s + "'" );
+    }
+
+    private static boolean handleConnection(int myID, SelectionKey key, Set<SelectionKey> connections) throws IOException {
+        connect(key);
+        connectionNum++;
+        connections.add(key);
+        SocketChannel socketChannel = (SocketChannel) key.channel();
+
+        if (!socketChannel.isConnected()) {
+            System.out.println("not connect ");
+            connections.remove(key);
+            return true;
+        }
+        Message msg = new Message(current, "Init", myID);
+        co.send(socketChannel, msg);
+        System.out.println("Connect init");
+        System.out.println("send msg:" + msg);
+        return false;
+    }
+
+    private static void initiateListenPort(int myID, Map<Integer, ServerInfo> servers) throws IOException {
         // Open a listener on each port, and register each one
         // with the selector
         ServerSocketChannel ssc = ServerSocketChannel.open();
@@ -74,68 +124,42 @@ public class Server {
         SelectionKey listenKey = ssc.register(selector, SelectionKey.OP_ACCEPT);
 
         System.out.println( "Going to listen on "+ servers.get(myID).port );
+    }
 
-        while (true) {
-            int num = selector.select(1000);
-            Set<SelectionKey> selectedKeys = selector.selectedKeys();
-            Iterator<SelectionKey> it = selectedKeys.iterator();
+    private static void initiateConnection(Map<Integer, ServerInfo> servers, int i) {
+        ServerInfo si = servers.get(i);
+        SocketChannel socketChannel = null;
+        try {
+            System.out.println("init connect init" + i);
+            socketChannel = SocketChannel.open();
+            socketChannel.configureBlocking(false);
 
-            while (it.hasNext()) {
-                SelectionKey key = it.next();
-
-                if ((key.readyOps() & SelectionKey.OP_ACCEPT) == SelectionKey.OP_ACCEPT) {
-                    // Accept the new connection
-                    ssc = (ServerSocketChannel) key.channel();
-                    SocketChannel sc = ssc.accept();
-                    sc.configureBlocking(false);
-
-                    // Add the new connection to the selector
-                    SelectionKey newKey = sc.register(selector, SelectionKey.OP_READ);
-                    it.remove();
-                    System.out.println("Got connection from " + sc);
-                    Message msg = new Message(current, "Init", myID);
-                    co.send(sc, msg);
-                    System.out.println("send msg:" + msg);
-                } else if ((key.readyOps() & SelectionKey.OP_READ) == SelectionKey.OP_READ) {
-                    // Read the data
-                    SocketChannel socketChannel = (SocketChannel) key.channel();
-
-                    co.recv(socketChannel);
-                    Serializable ois = co.recv(socketChannel);
-
-                    Message s = (Message)ois;
-
-                    syncCurrent(s);
-
-                    if (s == null) {
-                        key.channel().close();
-                        System.out.println("close" + myID);
-                    }
-                    System.out.println("String is: '" + s + "'" );
-
-                    it.remove();
-                }
-                else if( key.isConnectable()){
-                    connect(key);
-                    it.remove();
-                    SocketChannel socketChannel = (SocketChannel) key.channel();
-
-                    if (!socketChannel.isConnected()) {
-                        System.out.println("not connect ");
-                        continue;
-                    }
-                    Message msg = new Message(current, "Init", myID);
-                    co.send(socketChannel, msg);
-                    System.out.println("Connect init");
-                    System.out.println("send msg:" + msg);
-
-                    current++;
-                }
-
+            socketChannel.connect(new InetSocketAddress(si.serverIp, si.port));
+            socketChannel.register(selector, SelectionKey.OP_CONNECT);
+        } catch (IOException e) {
+            e.printStackTrace();
+            try {
+                socketChannel.close();
+            } catch (IOException e1) {
+                e1.printStackTrace();
             }
         }
-
     }
+
+    private static void handleAcception(int myID, SelectionKey key, Set<SelectionKey> connections) throws IOException {
+        ServerSocketChannel ssc;// Accept the new connection
+        ssc = (ServerSocketChannel) key.channel();
+        SocketChannel sc = ssc.accept();
+        sc.configureBlocking(false);
+
+        // Add the new connection to the selector
+        SelectionKey newKey = sc.register(selector, SelectionKey.OP_READ);
+        connections.add(newKey);
+
+        connectionNum++;
+        System.out.println("Got connection from " + sc);
+    }
+
 
     private static void syncCurrent(Message s) {
         current = Math.max(current, s.ts) + 1;
