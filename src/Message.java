@@ -1,4 +1,5 @@
 import java.io.Serializable;
+import java.util.Map;
 import java.util.Set;
 
 public class Message implements Serializable{
@@ -6,6 +7,9 @@ public class Message implements Serializable{
     public String type;
     public int id;
     public Set<Integer> availableSeats;
+    public Map<String, Integer> assignedSeats;
+    public String cmd;
+    public String ori;
     public Message(int ts, String type, int id) {
         this.ts = ts;
         this.type = type;
@@ -14,6 +18,6 @@ public class Message implements Serializable{
 
     @Override
     public String toString() {
-        return "" + ts + ":" + type + ":" + id + ":" + availableSeats;
+        return "" + ts + ":" + type + ":" + id + ":" + availableSeats + ":" + assignedSeats+":"+ori;
     }
 }

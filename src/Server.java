@@ -2,14 +2,16 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.ByteBuffer;
-import java.nio.channels.*;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.*;
 
 public class Server {
 
     private static Selector selector;
     private static int current = 0;
-    private static int connectionNum = 0;
     private static int numAcks = 0;
     private static int numInitAcks = 0;
     private static int myID;
@@ -17,6 +19,8 @@ public class Server {
     private static Set<SelectionKey> connections = new HashSet<>();
     private static PriorityQueue<Message> q = new PriorityQueue<>((m1, m2) -> m1.ts - m2.ts);
     private static Set<Integer> seatSet = new HashSet<>();
+    private static Map<String, Integer> assignedSeats = new HashMap<>();
+    private static Map<Integer, ServerInfo> servers = new HashMap<>();
     public static void main (String[] args) throws IOException, ClassNotFoundException, InterruptedException {
 
         // Read Config
@@ -27,7 +31,6 @@ public class Server {
         int numServer = Integer.parseInt(parts[1]);
         int numSeat = Integer.parseInt(parts[2]);
 
-        Map<Integer, ServerInfo> servers = new HashMap<>();
         for (int i = 0; i < numSeat;i ++)
             seatSet.add(i);
         if (myID == 0)
@@ -59,6 +62,9 @@ public class Server {
 
             while (it.hasNext()) {
                 SelectionKey key = it.next();
+                if (!key.isValid()) {
+                    continue;
+                }
 
                 if( key.isConnectable()) {
                     if (handleConnection(myID, key, connections)) continue;
@@ -71,9 +77,9 @@ public class Server {
                     handleRead(myID, key);
                     it.remove();
                 }
-//                System.out.println(connections);
-//                System.out.println(connectionNum);
-//                System.out.println(seatSet);
+                System.out.println(connections);
+                System.out.println(assignedSeats);
+                System.out.println(seatSet);
                 System.out.println(q);
             }
         }
@@ -82,17 +88,26 @@ public class Server {
     private static void handleRead(int myID, SelectionKey key) throws IOException, ClassNotFoundException {
         // Read the data
         SocketChannel socketChannel = (SocketChannel) key.channel();
+        System.out.println(socketChannel);
 
         co.recv(socketChannel);
         Serializable ois = co.recv(socketChannel);
-        Message s = (Message)ois;
-        syncCurrent(s);
 
+        Message s = (Message)ois;
+        System.out.println("recv:" + s);
         if (s == null) {
             key.channel().close();
+            key.cancel();
             System.out.println("close" + myID);
-        } else {
+        }
+//        if (s.id == -1) {
+//            handleClient(s);
+//            return;
+//        }
+        else
+            {
             if (s.type.equals("Init")) {
+                connections.add(key);
                 Message msg = new Message(current, "ActInit", myID);
                 co.send(socketChannel, msg);
                 System.out.println("send msg:" + msg);
@@ -109,27 +124,78 @@ public class Server {
             }
             else if (s.type.equals("Ack")) {
                 numAcks++;
-                if (numAcks == connections.size()) {
-                    seatSet.clear();
-                    seatSet.addAll(s.availableSeats);
-                    sendToAll(new Message(current, "delete", myID));
-                    q.poll();
+                if (numAcks == connections.size() && q.peek().id == myID) {
+                    if("Sync".equals(q.peek().type)) {
+                        seatSet.clear();
+                        seatSet.addAll(s.availableSeats);
+                        assignedSeats = new HashMap<>(s.assignedSeats);
+                        sendToAll(new Message(current, "delete", myID));
+                        q.poll();
+                    }
+                    else if ("reserve".equals(q.peek().type)) {
+                        Message m = q.poll();
+                        String []token = m.cmd.trim().split(" ");
+
+                        int oneSeat=-1;
+                        for (Integer seat : seatSet) {
+                            oneSeat = seat;
+                            break;
+                        }
+                        seatSet.remove(oneSeat);
+                        assignedSeats.put(token[1], oneSeat);
+                        Message msg = new Message(current, "delete", myID);
+                        msg.ori = "reserve";
+                        msg.assignedSeats = assignedSeats;
+                        msg.availableSeats = seatSet;
+                        sendToAll(msg);
+                    }
                 }
             }
             else if (s.type.equals("delete")) {
-                q.poll();
+                Message msg = q.poll();
+                if ("reserve".equals(msg.type)) {
+                    seatSet = new HashSet<>();
+                    seatSet.addAll(s.availableSeats);
+                    assignedSeats = new HashMap<>(s.assignedSeats);
+                }
+            }
+            else if (s.type.equals("client")) {
+                String tokens[] = s.cmd.trim().split(" ");
+                if (tokens[0].equals("reserve")) {
+                    if (seatSet.isEmpty()) {
+                        //TODO: send
+                        System.out.println("no seat");
+                    }
+                    else if (assignedSeats.keySet().contains(tokens[1])) {
+                        //TODO: send
+                        System.out.println("already assign");
+                    }
+                    System.out.println("reserve" + s );
+                    Message m = new Message(current, "reserve", myID);
+                    m.cmd = s.cmd;
+                    numAcks = 0;
+                    sendToAll(m);
+                    addToQ(m);
+                }
             }
             else {
                 q.add(s);
-                sendAck(socketChannel);
+                sendAck(socketChannel, s);
             }
         }
         System.out.println("String is: '" + s + "'" );
     }
 
-    private static void sendAck(SocketChannel socketChannel) throws IOException {
+    private static void handleClient(Message s) {
+
+
+    }
+
+    private static void sendAck(SocketChannel socketChannel, Message s) throws IOException {
         Message msg = new Message(current, "Ack", myID);
         msg.availableSeats = seatSet;
+        msg.assignedSeats= assignedSeats;
+        msg.ori = s.type;
         co.send(socketChannel, msg);
         System.out.println("send msg:" + msg);
     }
@@ -148,7 +214,6 @@ public class Server {
 
     private static boolean handleConnection(int myID, SelectionKey key, Set<SelectionKey> connections) throws IOException {
         connect(key);
-        connectionNum++;
         connections.add(key);
         SocketChannel socketChannel = (SocketChannel) key.channel();
 
@@ -206,9 +271,11 @@ public class Server {
 
         // Add the new connection to the selector
         SelectionKey newKey = sc.register(selector, SelectionKey.OP_READ);
-        connections.add(newKey);
+        InetSocketAddress remote = (InetSocketAddress) sc.getRemoteAddress();
+        ServerInfo si = new ServerInfo();
+        si.serverIp = remote.getAddress().getHostName().replace("localhost", "127.0.0.1");
+        si.port = remote.getPort();
 
-        connectionNum++;
         System.out.println("Got connection from " + sc);
     }
 
@@ -241,6 +308,7 @@ class ChannelOperator{
         wrap.putInt(0, baos.size()-4);
         socket.write(wrap);
     }
+
     private final ByteBuffer lengthByteBuffer = ByteBuffer.wrap(new byte[4]);
     private ByteBuffer dataByteBuffer = null;
     private boolean readLength = true;
@@ -273,4 +341,9 @@ class ChannelOperator{
 class ServerInfo {
     public String serverIp;
     public int port;
+
+    @Override
+    public String toString() {
+        return "" + serverIp + ":" + port;
+    }
 }
