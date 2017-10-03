@@ -3,6 +3,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.util.*;
 
 public class Client {
@@ -27,9 +28,11 @@ public class Client {
             line = scanner.nextLine();
             for (int i = 0; ; i = (i+1) % numServer) {
                 try {
+                    System.out.println("connect idx:" + i);
                     handleCommand(line, servers.get(i));
+                    break;
                 }
-                catch(SocketTimeoutException e) {
+                catch(Exception e) {
                     e.printStackTrace();
                 }
             }
@@ -54,14 +57,11 @@ public class Client {
         OutputStream outputStream = socket.getOutputStream();
         outputStream.write(wrap.array());
 
-        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        //System.out.println("echo: " + in.readLine());
-        String result = in.readLine();
-        if (result != null) {
-            for (String line : result.split("\t")) {
-                System.out.println(line);
-            }
-        }
+        InputStreamReader in = new InputStreamReader(socket.getInputStream());
+        char []charBuffer = new char[1024];
+        in.read(charBuffer);
+
+        System.out.println("echo: " + new String(charBuffer));
     }
 
 

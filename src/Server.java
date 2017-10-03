@@ -15,6 +15,7 @@ public class Server {
     private static int numAcks = 0;
     private static int numInitAcks = 0;
     private static int myID;
+    private static SelectionKey clientKey = null;
     private static ChannelOperator co = new ChannelOperator();
     private static Set<SelectionKey> connections = new HashSet<>();
     private static PriorityQueue<Message> q = new PriorityQueue<>((m1, m2) -> m1.ts - m2.ts);
@@ -96,12 +97,13 @@ public class Server {
         Message s = (Message)ois;
         System.out.println("recv:" + s);
         if (s == null) {
+            connections.remove(key);
             key.channel().close();
             key.cancel();
             System.out.println("close" + myID);
         }
-        else
-            {
+        else {
+            syncCurrent(s);
             if (s.type.equals("Init")) {
                 connections.add(key);
                 Message msg = new Message(current, "ActInit", myID);
@@ -130,17 +132,40 @@ public class Server {
                     }
                     else if ("reserve".equals(q.peek().type)) {
                         Message m = q.poll();
+                        reserve(m);
+                        Message msg = new Message(current, "delete", myID);
+//                        msg.ori = "reserve";
+                        msg.assignedSeats = assignedSeats;
+                        msg.availableSeats = seatSet;
+                        sendToAll(msg);
+
+                    }
+                    else if ("bookSeat".equals(q.peek().type)) {
+                        Message m = q.poll();
                         String []token = m.cmd.trim().split(" ");
 
-                        int oneSeat=-1;
-                        for (Integer seat : seatSet) {
-                            oneSeat = seat;
-                            break;
-                        }
-                        seatSet.remove(oneSeat);
-                        assignedSeats.put(token[1], oneSeat);
+                        String name = token[1];
+                        int seatNum = Integer.parseInt(token[2]);
+
+                        seatSet.remove(seatNum);
+                        assignedSeats.put(token[1], seatNum);
                         Message msg = new Message(current, "delete", myID);
-                        msg.ori = "reserve";
+//                        msg.ori = "bookSeat";
+                        msg.assignedSeats = assignedSeats;
+                        msg.availableSeats = seatSet;
+                        sendToAll(msg);
+                    }
+                    else if ("delete".equals(q.peek().type)) {
+                        Message m = q.poll();
+                        String []token = m.cmd.trim().split(" ");
+
+                        String name = token[1];
+                        int seatNum = assignedSeats.get(name);
+                        assignedSeats.remove(name);
+
+                        seatSet.add(seatNum);
+                        Message msg = new Message(current, "delete", myID);
+//                        msg.ori = "delete";
                         msg.assignedSeats = assignedSeats;
                         msg.availableSeats = seatSet;
                         sendToAll(msg);
@@ -149,13 +174,15 @@ public class Server {
             }
             else if (s.type.equals("delete")) {
                 Message msg = q.poll();
-                if ("reserve".equals(msg.type)) {
+                if ("reserve".equals(msg.type) || "bookSeat".equals(msg.type) || "delete".equals(msg.type)) {
                     seatSet = new HashSet<>();
                     seatSet.addAll(s.availableSeats);
                     assignedSeats = new HashMap<>(s.assignedSeats);
                 }
             }
             else if (s.type.equals("client")) {
+                key.cancel();
+                clientKey = key;
                 String tokens[] = s.cmd.trim().split(" ");
                 if (tokens[0].equals("reserve")) {
                     if (seatSet.isEmpty()) {
@@ -170,6 +197,41 @@ public class Server {
                     Message m = new Message(current, "reserve", myID);
                     m.cmd = s.cmd;
                     numAcks = 0;
+                    if (connections.isEmpty())
+                        reserve(m);
+                    else {
+                        sendToAll(m);
+                        addToQ(m);
+                    }
+                }
+                else if (tokens[0].equals("bookSeat")) {
+                    if (seatSet.isEmpty()) {
+                        //TODO: send
+                        System.out.println("no seat");
+                    }
+                    else if (assignedSeats.keySet().contains(tokens[1])) {
+                        //TODO: send
+                        System.out.println("already assign");
+                    }
+                    System.out.println("book seat" + s );
+                    Message m = new Message(current, "bookSeat", myID);
+                    m.cmd = s.cmd;
+                    numAcks = 0;
+                    sendToAll(m);
+                    addToQ(m);
+                }
+                else if (tokens[0].equals("delete")) {
+                    if (!assignedSeats.keySet().contains(tokens[1])) {
+                        Message message = new Message(current, "response", myID);
+                        message.cmd = "already assign";
+                        co.send((SocketChannel)clientKey.channel(), message);
+
+                        System.out.println("already assign");
+                    }
+                    System.out.println("release seat" + s );
+                    Message m = new Message(current, "delete", myID);
+                    m.cmd = s.cmd;
+                    numAcks = 0;
                     sendToAll(m);
                     addToQ(m);
                 }
@@ -182,9 +244,18 @@ public class Server {
         System.out.println("String is: '" + s + "'" );
     }
 
-    private static void handleClient(Message s) {
+    private static void reserve(Message m) throws IOException {
+        String []token = m.cmd.trim().split(" ");
 
-
+        int oneSeat=-1;
+        for (Integer seat : seatSet) {
+            oneSeat = seat;
+            break;
+        }
+        seatSet.remove(oneSeat);
+        assignedSeats.put(token[1], oneSeat);
+        ByteBuffer wrap = ByteBuffer.wrap("reserve message".getBytes());
+        ((SocketChannel)clientKey.channel()).write(wrap);
     }
 
     private static void sendAck(SocketChannel socketChannel, Message s) throws IOException {
@@ -233,6 +304,7 @@ public class Server {
         ServerSocket ss = ssc.socket();
         InetSocketAddress address = new InetSocketAddress(servers.get(myID).port);
         ss.bind(address);
+        ss.setReuseAddress(true);
 
         SelectionKey listenKey = ssc.register(selector, SelectionKey.OP_ACCEPT);
 
@@ -304,6 +376,7 @@ class ChannelOperator{
         wrap.putInt(0, baos.size()-4);
         socket.write(wrap);
     }
+
 
     private final ByteBuffer lengthByteBuffer = ByteBuffer.wrap(new byte[4]);
     private ByteBuffer dataByteBuffer = null;

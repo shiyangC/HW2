@@ -18,6 +18,6 @@ public class Message implements Serializable{
 
     @Override
     public String toString() {
-        return "" + ts + ":" + type + ":" + id + ":" + availableSeats + ":" + assignedSeats+":"+ori;
+        return "" + ts + ":" + type + ":" + id + ":" + availableSeats + ":" + assignedSeats+":"+ori +":"+cmd;
     }
 }
