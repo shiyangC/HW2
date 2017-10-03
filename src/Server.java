@@ -100,10 +100,6 @@ public class Server {
             key.cancel();
             System.out.println("close" + myID);
         }
-//        if (s.id == -1) {
-//            handleClient(s);
-//            return;
-//        }
         else
             {
             if (s.type.equals("Init")) {
