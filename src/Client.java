@@ -1,10 +1,10 @@
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Scanner;
 
 public class Client {
     public static int TIMEOUT = 100;
@@ -61,7 +61,7 @@ public class Client {
         char []charBuffer = new char[1024];
         in.read(charBuffer);
 
-        System.out.println("echo: " + new String(charBuffer));
+        System.out.println("echo: " + new String(charBuffer).split("#")[0]);
     }
 
 

@@ -127,14 +127,13 @@ public class Server {
                         seatSet.clear();
                         seatSet.addAll(s.availableSeats);
                         assignedSeats = new HashMap<>(s.assignedSeats);
-                        sendToAll(new Message(current, "delete", myID));
+                        sendToAll(new Message(current, "Delete", myID));
                         q.poll();
                     }
                     else if ("reserve".equals(q.peek().type)) {
                         Message m = q.poll();
                         reserve(m);
-                        Message msg = new Message(current, "delete", myID);
-//                        msg.ori = "reserve";
+                        Message msg = new Message(current, "Delete", myID);
                         msg.assignedSeats = assignedSeats;
                         msg.availableSeats = seatSet;
                         sendToAll(msg);
@@ -142,37 +141,37 @@ public class Server {
                     }
                     else if ("bookSeat".equals(q.peek().type)) {
                         Message m = q.poll();
-                        String []token = m.cmd.trim().split(" ");
 
-                        String name = token[1];
-                        int seatNum = Integer.parseInt(token[2]);
+                        bookSeat(m);
 
-                        seatSet.remove(seatNum);
-                        assignedSeats.put(token[1], seatNum);
-                        Message msg = new Message(current, "delete", myID);
-//                        msg.ori = "bookSeat";
+                        Message msg = new Message(current, "Delete", myID);
                         msg.assignedSeats = assignedSeats;
                         msg.availableSeats = seatSet;
                         sendToAll(msg);
                     }
                     else if ("delete".equals(q.peek().type)) {
                         Message m = q.poll();
-                        String []token = m.cmd.trim().split(" ");
 
-                        String name = token[1];
-                        int seatNum = assignedSeats.get(name);
-                        assignedSeats.remove(name);
+                        delete(m);
 
-                        seatSet.add(seatNum);
-                        Message msg = new Message(current, "delete", myID);
-//                        msg.ori = "delete";
+                        Message msg = new Message(current, "Delete", myID);
+                        msg.assignedSeats = assignedSeats;
+                        msg.availableSeats = seatSet;
+                        sendToAll(msg);
+                    }
+                    else if ("search".equals(q.peek().type)) {
+                        Message m = q.poll();
+
+                        search(m);
+
+                        Message msg = new Message(current, "Delete", myID);
                         msg.assignedSeats = assignedSeats;
                         msg.availableSeats = seatSet;
                         sendToAll(msg);
                     }
                 }
             }
-            else if (s.type.equals("delete")) {
+            else if (s.type.equals("Delete")) {
                 Message msg = q.poll();
                 if ("reserve".equals(msg.type) || "bookSeat".equals(msg.type) || "delete".equals(msg.type)) {
                     seatSet = new HashSet<>();
@@ -185,14 +184,6 @@ public class Server {
                 clientKey = key;
                 String tokens[] = s.cmd.trim().split(" ");
                 if (tokens[0].equals("reserve")) {
-                    if (seatSet.isEmpty()) {
-                        //TODO: send
-                        System.out.println("no seat");
-                    }
-                    else if (assignedSeats.keySet().contains(tokens[1])) {
-                        //TODO: send
-                        System.out.println("already assign");
-                    }
                     System.out.println("reserve" + s );
                     Message m = new Message(current, "reserve", myID);
                     m.cmd = s.cmd;
@@ -205,35 +196,40 @@ public class Server {
                     }
                 }
                 else if (tokens[0].equals("bookSeat")) {
-                    if (seatSet.isEmpty()) {
-                        //TODO: send
-                        System.out.println("no seat");
-                    }
-                    else if (assignedSeats.keySet().contains(tokens[1])) {
-                        //TODO: send
-                        System.out.println("already assign");
-                    }
                     System.out.println("book seat" + s );
                     Message m = new Message(current, "bookSeat", myID);
                     m.cmd = s.cmd;
                     numAcks = 0;
-                    sendToAll(m);
-                    addToQ(m);
+                    if (connections.isEmpty())
+                        bookSeat(m);
+                    else {
+                        sendToAll(m);
+                        addToQ(m);
+                    }
                 }
                 else if (tokens[0].equals("delete")) {
-                    if (!assignedSeats.keySet().contains(tokens[1])) {
-                        Message message = new Message(current, "response", myID);
-                        message.cmd = "already assign";
-                        co.send((SocketChannel)clientKey.channel(), message);
-
-                        System.out.println("already assign");
-                    }
                     System.out.println("release seat" + s );
                     Message m = new Message(current, "delete", myID);
                     m.cmd = s.cmd;
                     numAcks = 0;
-                    sendToAll(m);
-                    addToQ(m);
+                    if (connections.isEmpty())
+                        bookSeat(m);
+                    else {
+                        sendToAll(m);
+                        addToQ(m);
+                    }
+                }
+                else if (tokens[0].equals("search")) {
+                    System.out.println("search " + s );
+                    Message m = new Message(current, "search", myID);
+                    m.cmd = s.cmd;
+                    numAcks = 0;
+                    if (connections.isEmpty())
+                        search(m);
+                    else {
+                        sendToAll(m);
+                        addToQ(m);
+                    }
                 }
             }
             else {
@@ -244,8 +240,53 @@ public class Server {
         System.out.println("String is: '" + s + "'" );
     }
 
+    private static void bookSeat(Message m) throws IOException {
+        String []token = m.cmd.trim().split(" ");
+
+        String name = token[1];
+        int seatNum = Integer.parseInt(token[2]);
+
+        if (seatSet.isEmpty()) {
+            ByteBuffer wrap = ByteBuffer.wrap(("Sold out - No seat available#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+
+        if (!seatSet.contains(seatNum)) {
+            ByteBuffer wrap = ByteBuffer.wrap((seatNum + " is not available#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+
+        if (assignedSeats.keySet().contains(name)) {
+            ByteBuffer wrap = ByteBuffer.wrap(("Seat already booked against the name provided#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+
+        seatSet.remove(seatNum);
+
+        assignedSeats.put(name, seatNum);
+        ByteBuffer wrap = ByteBuffer.wrap(("Seat assigned to you is " + seatNum + "#").getBytes());
+        ((SocketChannel)clientKey.channel()).write(wrap);
+    }
+
     private static void reserve(Message m) throws IOException {
         String []token = m.cmd.trim().split(" ");
+
+        String name = token[1];
+
+        if (seatSet.isEmpty()) {
+            ByteBuffer wrap = ByteBuffer.wrap(("Sold out - No seat available#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+
+        if (assignedSeats.keySet().contains(name)) {
+            ByteBuffer wrap = ByteBuffer.wrap(("Seat already booked against the name provided#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
 
         int oneSeat=-1;
         for (Integer seat : seatSet) {
@@ -254,7 +295,39 @@ public class Server {
         }
         seatSet.remove(oneSeat);
         assignedSeats.put(token[1], oneSeat);
-        ByteBuffer wrap = ByteBuffer.wrap("reserve message".getBytes());
+        ByteBuffer wrap = ByteBuffer.wrap(("Seat assigned to you is " + oneSeat + "#").getBytes());
+        ((SocketChannel)clientKey.channel()).write(wrap);
+    }
+
+    private static void search(Message m) throws IOException {
+        String []token = m.cmd.trim().split(" ");
+
+        String name = token[1];
+
+        if (!assignedSeats.keySet().contains(name)) {
+            ByteBuffer wrap = ByteBuffer.wrap(("‘No reservation found for " + name + "#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+
+        int seatNum = assignedSeats.get(name);
+        ByteBuffer wrap = ByteBuffer.wrap(( seatNum + "#").getBytes());
+        ((SocketChannel)clientKey.channel()).write(wrap);
+    }
+
+    private static void delete(Message m) throws IOException {
+        String []token = m.cmd.trim().split(" ");
+
+        if (!assignedSeats.containsKey(token[1])) {
+            ByteBuffer wrap = ByteBuffer.wrap(("No reservation found for " + token[1] + "#").getBytes());
+            ((SocketChannel)clientKey.channel()).write(wrap);
+            return ;
+        }
+        int seatNum = assignedSeats.get(token[1]);
+
+        seatSet.add(seatNum);
+        assignedSeats.remove(token[1]);
+        ByteBuffer wrap = ByteBuffer.wrap((seatNum + "#").getBytes());
         ((SocketChannel)clientKey.channel()).write(wrap);
     }
 
